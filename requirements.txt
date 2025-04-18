@@ -1,0 +1,22 @@
+# Core packages
+streamlit==1.34.0
+pandas==2.2.0
+numpy==1.26.0
+
+# Data handling
+openpyxl==3.1.2
+pdfplumber==0.10.3
+chardet==5.2.0
+
+# Machine learning
+scikit-learn==1.4.0
+
+# API integration
+google-generativeai==0.7.0
+
+# Data visualization (implicit dependencies for Streamlit)
+matplotlib==3.8.0
+plotly==5.18.0
+
+# Utility packages
+python-dotenv==1.0.0
