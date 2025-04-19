@@ -25,7 +25,7 @@ class GeminiClient:
             try:
                 models = genai.list_models()
                 gemini_models = [model.name for model in models if "gemini" in model.name.lower()]
-                self.model_name = gemini_models[0] if gemini_models else "gemini-1.5-pro"
+                self.model_name = gemini_models[0] if gemini_models else "gemini-1.5-flash"
             except:
                 # self.model_name = "gemini-1.5-pro"
                 self.model_name = "gemini-1.5-flash"
