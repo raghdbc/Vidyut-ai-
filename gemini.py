@@ -23,7 +23,7 @@ class GeminiClient:
             if gemini_models:
                 self.model_name = gemini_models[0]
             else:
-                self.model_name = "gemini-1.5-pro"  # Updated default model name
+                self.model_name = "gemini-1.5-flash"  # Updated default model name
                 
             print(f"Using Gemini model: {self.model_name}")
             self.model = genai.GenerativeModel(self.model_name)
