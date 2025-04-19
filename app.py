@@ -1,11 +1,21 @@
 import streamlit as st
+
+# Must be the first Streamlit command in your script
+st.set_page_config(page_title="Vidyut AI", layout="wide")
+
 import pandas as pd
 import numpy as np
 from io import BytesIO
+import chardet
+from sklearn.ensemble import IsolationForest
 from gemini import GeminiClient
 import pdfplumber
-from sklearn.ensemble import IsolationForest
-import chardet
+
+
+
+
+
+
 
 # Initialize Gemini API client
 @st.cache_resource
