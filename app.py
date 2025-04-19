@@ -1,47 +1,97 @@
+# Must be the very first Streamlit command - before any other imports or code that might use Streamlit
 import streamlit as st
-
-# Must be the first Streamlit command in your script
 st.set_page_config(page_title="Vidyut AI", layout="wide")
 
+# Now import everything else
 import pandas as pd
 import numpy as np
 from io import BytesIO
 import chardet
 from sklearn.ensemble import IsolationForest
-from gemini import GeminiClient
-import pdfplumber
 
+# Import or define the GeminiClient class
+class GeminiClient:
+    """Client for interacting with Google's Gemini API."""
+    
+    def __init__(self, api_key: str):
+        """Initialize the Gemini client with API key."""
+        try:
+            import google.generativeai as genai
+            self.genai = genai
+            self.api_key = api_key
+            genai.configure(api_key=api_key)
+            
+            # Try to find valid model
+            try:
+                models = genai.list_models()
+                gemini_models = [model.name for model in models if "gemini" in model.name.lower()]
+                self.model_name = gemini_models[0] if gemini_models else "gemini-1.5-pro"
+            except:
+                self.model_name = "gemini-1.5-pro"
+                
+            self.model = genai.GenerativeModel(self.model_name)
+        except ImportError:
+            st.error("Please install google-generativeai: pip install google-generativeai")
+            self.model = None
+        except Exception as e:
+            st.error(f"Error initializing Gemini: {e}")
+            self.model = None
+    
+    def generate(self, prompt: str, temperature: float = 0.7) -> str:
+        """Generate text response from Gemini."""
+        if not self.model:
+            return "Gemini not available"
+            
+        try:
+            response = self.model.generate_content(
+                prompt,
+                generation_config={"temperature": temperature}
+            )
+            return response.text
+        except Exception as e:
+            return f"Gemini API error: {e}"
+        
+    def generate_stream(self, prompt: str, temperature: float = 0.7):
+        """Stream text response from Gemini."""
+        if not self.model:
+            yield "Gemini not available"
+            return
+            
+        try:
+            response = self.model.generate_content(
+                prompt,
+                generation_config={"temperature": temperature},
+                stream=True
+            )
+            
+            for chunk in response:
+                if hasattr(chunk, 'text') and chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            yield f"Gemini API error: {e}"
 
-
-
-
-
-
-# Initialize Gemini API client
+# Initialize Gemini client
 @st.cache_resource
 def get_gemini_client():
     try:
-        return GeminiClient(api_key=st.secrets['GEMINI_API_KEY'])
+        api_key = st.secrets.get('GEMINI_API_KEY')
+        if not api_key:
+            st.sidebar.warning("No Gemini API key found. Using mock responses.")
+            return MockClient()
+        return GeminiClient(api_key=api_key)
     except Exception as e:
-        st.error(f"Failed to initialize Gemini client: {e}")
-        return None
+        st.sidebar.error(f"Failed to initialize Gemini client: {e}")
+        return MockClient()
 
-gemini = get_gemini_client()
-
-def call_gemini(prompt: str, stream: bool = False):
-    """Send prompt to Gemini and optionally stream the response."""
-    if not gemini:
-        return "Gemini client is not initialized"
+class MockClient:
+    """Mock client for when Gemini is not available"""
+    def generate(self, prompt, **kwargs):
+        return f"Analyzing data... [Mock response for: {prompt[:50]}...]"
     
-    try:
-        if stream:
-            return gemini.generate_stream(prompt=prompt)
-        return gemini.generate(prompt=prompt)
-    except Exception as e:
-        error_msg = f"Gemini API error: {e}"
-        st.error(error_msg)
-        return error_msg
+    def generate_stream(self, prompt, **kwargs):
+        yield f"Analyzing data... [Mock response for: {prompt[:50]}...]"
 
+# Load data helper function
 @st.cache_data
 def load_data(uploaded_file):
     if uploaded_file is None:
@@ -49,7 +99,7 @@ def load_data(uploaded_file):
         
     try:
         return pd.read_excel(uploaded_file)
-    except Exception as e:
+    except Exception:
         try:
             # Reset file pointer
             uploaded_file.seek(0)
@@ -63,10 +113,56 @@ def load_data(uploaded_file):
             
             # Try with detected encoding
             return pd.read_csv(uploaded_file, encoding=encoding)
-        except Exception as e2:
-            st.error(f"Failed to load data: {e2}")
+        except Exception as e:
+            st.error(f"Failed to load data: {e}")
             return None
 
+# Initialize session state
+def initialize_state():
+    if 'initialized' not in st.session_state:
+        st.session_state['initialized'] = True
+        if 'df_processed' not in st.session_state:
+            st.session_state['df_processed'] = None
+        if 'selected_kpis' not in st.session_state:
+            st.session_state['selected_kpis'] = []
+        if 'actions' not in st.session_state:
+            st.session_state['actions'] = []
+        if 'chat' not in st.session_state:
+            st.session_state['chat'] = []
+        if 'insights' not in st.session_state:
+            st.session_state['insights'] = ""
+
+# Initialize data when file is uploaded
+def init_data():
+    if 'uploader' not in st.session_state:
+        return
+        
+    upl = st.session_state['uploader']
+    df0 = load_data(upl)
+    
+    if df0 is not None:
+        st.session_state['df_processed'] = df0.copy()
+        st.session_state['selected_kpis'] = []
+        st.session_state['actions'] = []
+        st.session_state['chat'] = []
+        st.session_state['insights'] = ""
+
+# Function to call Gemini API
+def call_gemini(prompt: str, stream: bool = False):
+    gemini = get_gemini_client()
+    if not gemini:
+        return "AI service not available" 
+    
+    try:
+        if stream:
+            return gemini.generate_stream(prompt=prompt)
+        return gemini.generate(prompt=prompt)
+    except Exception as e:
+        error_msg = f"AI service error: {e}"
+        st.error(error_msg)
+        return error_msg
+
+# Compute outliers in data
 def compute_outliers(df, method, params):
     if df is None or df.empty:
         return pd.Series()
@@ -98,6 +194,7 @@ def compute_outliers(df, method, params):
     
     return out.sum()
 
+# Handle outliers in data
 def handle_outliers(df, method, params):
     if df is None or df.empty:
         return df
@@ -129,20 +226,6 @@ def handle_outliers(df, method, params):
     
     df_mod = df_mod[~mask]
     return df_mod
-
-def init_data():
-    if 'uploader' not in st.session_state:
-        return
-        
-    upl = st.session_state['uploader']
-    df0 = load_data(upl)
-    
-    if df0 is not None:
-        st.session_state['df_processed'] = df0.copy()
-        st.session_state['selected_kpis'] = []
-        st.session_state['actions'] = []
-        st.session_state['chat'] = []
-        st.session_state['insights'] = ""
 
 # --- EDA Tab ---
 def eda_tab():
@@ -270,8 +353,8 @@ def decision_board_tab():
     st.subheader("Decision Board 🧠")
     
     # Properly check for dataframe and KPIs existence without triggering ValueError
-    has_df = 'df_processed' in st.session_state and st.session_state['df_processed'] is not None
-    has_kpis = 'selected_kpis' in st.session_state and len(st.session_state['selected_kpis']) > 0
+    has_df = 'df_processed' in st.session_state and st.session_state['df_processed'] is not None 
+    has_kpis = 'selected_kpis' in st.session_state and len(st.session_state.get('selected_kpis', [])) > 0
     
     if not has_df or not has_kpis:
         st.warning("Dashboard KPIs required. Please complete the Dashboard tab first.")
@@ -282,10 +365,11 @@ def decision_board_tab():
     
     if st.button("Generate Insights (stream)"):
         with st.spinner():
+            insights_container = st.empty()
             insights = ""
             for chunk in call_gemini(f"Based on KPIs {kpis}, analyze these columns of data and recommend actions.", stream=True):
-                st.write(chunk)
                 insights += chunk
+                insights_container.markdown(insights)
             st.session_state['insights'] = insights
 
     st.markdown("---")
@@ -294,33 +378,43 @@ def decision_board_tab():
     if 'actions' not in st.session_state:
         st.session_state['actions'] = []
         
-    for idx, ai in enumerate(st.session_state['actions']):
-        cols = st.columns([3, 2, 1])
-        cols[0].write(f"{ai['action']} (Owner: {ai['owner']})")
+    # Display existing actions
+    for idx, ai in enumerate(st.session_state.get('actions', [])):
+        cols = st.columns([3, 1, 1])
+        cols[0].write(f"{ai.get('action', '')} (Owner: {ai.get('owner', '')})")
         
-        if cols[1].button("Edit", key=f"edit{idx}"):
-            st.session_state[f'editing_{idx}'] = True
-            
-        if cols[2].button("Del", key=f"d{idx}"):
+        edit_pressed = cols[1].button("Edit", key=f"edit{idx}")
+        delete_pressed = cols[2].button("Delete", key=f"del{idx}")
+        
+        if delete_pressed:
             st.session_state['actions'].pop(idx)
             st.rerun()
             
-        if st.session_state.get(f'editing_{idx}', False):
-            new_a = st.text_input("Action", ai['action'], key=f"a{idx}")
-            new_o = st.text_input("Owner", ai['owner'], key=f"o{idx}")
+        if edit_pressed:
+            st.session_state[f'editing_{idx}'] = True
             
-            if st.button("Save", key=f"s{idx}"):
-                st.session_state['actions'][idx] = {'action': new_a, 'owner': new_o}
-                st.session_state[f'editing_{idx}'] = False
-                st.rerun()
+        if st.session_state.get(f'editing_{idx}', False):
+            with st.container():
+                new_a = st.text_input("Action", ai.get('action', ''), key=f"a{idx}")
+                new_o = st.text_input("Owner", ai.get('owner', ''), key=f"o{idx}")
                 
-    with st.form("add_act", clear_on_submit=True):
-        a = st.text_input("New Action")
-        o = st.text_input("Owner")
-        
-        if st.form_submit_button("Add") and a and o:
-            st.session_state['actions'].append({'action': a, 'owner': o})
-            st.rerun()
+                save_pressed = st.button("Save Changes", key=f"save{idx}")
+                if save_pressed:
+                    st.session_state['actions'][idx] = {'action': new_a, 'owner': new_o}
+                    st.session_state[f'editing_{idx}'] = False
+                    st.rerun()
+            
+    # Add new action
+    st.markdown("---")
+    st.subheader("Add New Action")
+    new_action = st.text_input("Action Description")
+    new_owner = st.text_input("Action Owner")
+    
+    if st.button("Add Action") and new_action and new_owner:
+        if 'actions' not in st.session_state:
+            st.session_state['actions'] = []
+        st.session_state['actions'].append({'action': new_action, 'owner': new_owner})
+        st.rerun()
 
     st.markdown("---")
     st.subheader("Chat Assistant")
@@ -331,18 +425,23 @@ def decision_board_tab():
     q = st.text_input("Question...")
     
     if st.button("Send Query") and q:
-        resp = ""
-        container = st.container()
-        
-        with container:
+        with st.spinner("Generating response..."):
+            resp_container = st.empty()
+            resp = ""
+            
             for chunk in call_gemini(f"Insights: {st.session_state.get('insights', '')}\nQ: {q}", stream=True):
-                st.write(chunk)
                 resp += chunk
+                resp_container.markdown(resp)
                 
-        st.session_state['chat'].append((q, resp))
+            st.session_state['chat'].append((q, resp))
         
-    for q, r in st.session_state['chat']:
-        st.markdown(f"**You:** {q}\n**AI:** {r}")
+    if st.session_state.get('chat'):
+        st.markdown("---")
+        st.subheader("Chat History")
+        for q, r in st.session_state['chat']:
+            st.markdown(f"**You:** {q}")
+            st.markdown(f"**AI:** {r}")
+            st.markdown("---")
 
 # --- What-If Analysis Tab ---
 def what_if_tab():
@@ -424,34 +523,25 @@ def analytics_tab():
 
 # --- Main ---
 def main():
-    st.set_page_config(page_title="Vidyut AI", layout="wide")
+    # Page title and description are already set at the top of the script
     
     st.sidebar.title("Vidyut AI Prototype")
     st.sidebar.file_uploader("Upload Excel/CSV", key='uploader', type=['xls','xlsx','csv'], on_change=init_data)
     
-    # Check if Gemini client is available
-    if gemini is None:
-        st.error("Gemini API client could not be initialized. Please check your API key.")
-        return
-        
-    # Initialize session state if needed
-    if 'df_processed' not in st.session_state:
-        st.session_state['df_processed'] = None
-    if 'selected_kpis' not in st.session_state:
-        st.session_state['selected_kpis'] = []
-    if 'actions' not in st.session_state:
-        st.session_state['actions'] = []
-    if 'chat' not in st.session_state:
-        st.session_state['chat'] = []
-    if 'insights' not in st.session_state:
-        st.session_state['insights'] = ""
-        
-    tabs = st.tabs(["EDA", "AutoML", "Dashboard", "Decision Board", "What-If", "Analytics"])
-    funcs = [eda_tab, automl_tab, dashboard_tab, decision_board_tab, what_if_tab, analytics_tab]
+    # Initialize session state variables
+    initialize_state()
     
-    for tab, fn in zip(tabs, funcs):
+    # Create tabs for different functionalities
+    tabs = st.tabs(["EDA", "AutoML", "Dashboard", "Decision Board", "What-If", "Analytics"])
+    
+    # Define the function to run for each tab
+    tab_functions = [eda_tab, automl_tab, dashboard_tab, decision_board_tab, what_if_tab, analytics_tab]
+    
+    # Run the appropriate function for each tab
+    for i, tab in enumerate(tabs):
         with tab:
-            fn()
+            tab_functions[i]()
 
+# Call the main function
 if __name__ == '__main__':
     main()
